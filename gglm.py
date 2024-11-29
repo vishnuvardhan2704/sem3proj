@@ -1,11 +1,15 @@
+# Required Imports
 import streamlit as st
 import folium
 import ee
 from streamlit.components.v1 import html
 
 # Initialize Earth Engine
-ee.Authenticate()
-ee.Initialize(project='ee-dartsih')
+try:
+    ee.Authenticate()
+    ee.Initialize(project='ee-dartsih')
+except Exception as e:
+    st.error(f"Error initializing Earth Engine: {e}")
 
 # Add custom CSS for aesthetics
 def add_custom_css():
@@ -31,26 +35,22 @@ def add_custom_css():
             color: white;
             border-radius: 8px;
         }
-        .stTitle h1 {
-            color: #66FCF1;
-        }
         </style>
     """, unsafe_allow_html=True)
 
 add_custom_css()
 
+# Utility functions
 def get_buffered_aoi(center_lon, center_lat, radius_km):
     point = ee.Geometry.Point([center_lon, center_lat])
-    buffer = point.buffer(radius_km * 1000)  # Convert km to meters
-    return buffer
+    return point.buffer(radius_km * 1000)  # Convert km to meters
 
 def enhanced_lee_filter(image):
     weights = ee.Kernel.square(radius=1)
     mean = image.reduceNeighborhood(ee.Reducer.mean(), weights)
     variance = image.reduceNeighborhood(ee.Reducer.variance(), weights)
     b = variance.divide(variance.add(1e-6))  # Avoid division by zero
-    result = mean.add(b.multiply(image.subtract(mean)))
-    return result
+    return mean.add(b.multiply(image.subtract(mean)))
 
 def boxcar_filter(image):
     kernel = ee.Kernel.square(radius=1)
@@ -58,14 +58,15 @@ def boxcar_filter(image):
 
 def temporal_median(collection, start_date, end_date):
     filtered = collection.filterDate(start_date, end_date)
-    median_image = filtered.median()
-    return median_image
+    return filtered.median()
 
 def load_image_collection(aoi, start_date, end_date):
-    collection = ee.ImageCollection('COPERNICUS/S1_GRD') \
-        .filter(ee.Filter.eq('instrumentMode', 'IW')) \
-        .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV')) \
+    collection = (
+        ee.ImageCollection('COPERNICUS/S1_GRD')
+        .filter(ee.Filter.eq('instrumentMode', 'IW'))
+        .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
         .filterBounds(aoi)
+    )
     return temporal_median(collection, start_date, end_date)
 
 def process_images(aoi, start1, end1, start2, end2):
@@ -85,18 +86,18 @@ def process_images(aoi, start1, end1, start2, end2):
         threshold = 0.1
         changes = diff.gt(threshold)
 
-        # Export the AOI as GeoJSON
-        geojson_aoi = aoi.getInfo()  # Get the AOI as GeoJSON format
+        geojson_aoi = aoi.getInfo()  # Get AOI in GeoJSON format
         return image1_boxcar, image2_boxcar, diff, changes, geojson_aoi
-    
+
     except Exception as e:
         st.error(f"Error processing images: {e}")
         return None, None, None, None, None
 
+# Main function
 def main():
     st.title("Space Tech SAR Change Detection")
 
-    # Placeholder for coordinates
+    # Session state for selected coordinates
     if "selected_coordinates" not in st.session_state:
         st.session_state["selected_coordinates"] = None
 
@@ -119,59 +120,60 @@ def main():
 
         if submitted:
             if lat_lon:
-                center_lat, center_lon = map(float, lat_lon.split(","))
-                aoi = get_buffered_aoi(center_lon, center_lat, radius_km)
-                image1_boxcar, image2_boxcar, diff, changes, geojson_aoi = process_images(aoi, str(start1), str(end1), str(start2), str(end2))
+                try:
+                    center_lat, center_lon = map(float, lat_lon.split(","))
+                    aoi = get_buffered_aoi(center_lon, center_lat, radius_km)
+                    image1_boxcar, image2_boxcar, diff, changes, geojson_aoi = process_images(aoi, str(start1), str(end1), str(start2), str(end2))
 
-                if image1_boxcar and image2_boxcar and diff:
-                    vis_params = {'min': -25, 'max': 0}
-                    diff_vis_params = {'min': 0, 'max': 10}
-                    map_id_image1 = ee.Image(image1_boxcar).getMapId(vis_params)
-                    map_id_image2 = ee.Image(image2_boxcar).getMapId(vis_params)
-                    map_id_diff = ee.Image(diff).getMapId(diff_vis_params)
+                    if image1_boxcar and image2_boxcar and diff:
+                        vis_params = {'min': -25, 'max': 0}
+                        diff_vis_params = {'min': 0, 'max': 10}
+                        map_id_image1 = ee.Image(image1_boxcar).getMapId(vis_params)
+                        map_id_image2 = ee.Image(image2_boxcar).getMapId(vis_params)
+                        map_id_diff = ee.Image(diff).getMapId(diff_vis_params)
 
-                    updated_map = folium.Map(location=[center_lat, center_lon], zoom_start=10)
-                    folium.TileLayer(
-                        tiles=map_id_image1['tile_fetcher'].url_format,
-                        attr='Map data © Google',
-                        overlay=True,
-                        name='Image 1 (Filtered & Boxcar)'
-                    ).add_to(updated_map)
-                    folium.TileLayer(
-                        tiles=map_id_image2['tile_fetcher'].url_format,
-                        attr='Map data © Google',
-                        overlay=True,
-                        name='Image 2 (Filtered & Boxcar)'
-                    ).add_to(updated_map)
-                    folium.TileLayer(
-                        tiles=map_id_diff['tile_fetcher'].url_format,
-                        attr='Map data © Google',
-                        overlay=True,
-                        name='Difference Image'
-                    ).add_to(updated_map)
+                        updated_map = folium.Map(location=[center_lat, center_lon], zoom_start=10)
+                        folium.TileLayer(
+                            tiles=map_id_image1['tile_fetcher'].url_format,
+                            attr='Map data © Google',
+                            overlay=True,
+                            name='Image 1 (Filtered & Boxcar)'
+                        ).add_to(updated_map)
+                        folium.TileLayer(
+                            tiles=map_id_image2['tile_fetcher'].url_format,
+                            attr='Map data © Google',
+                            overlay=True,
+                            name='Image 2 (Filtered & Boxcar)'
+                        ).add_to(updated_map)
+                        folium.TileLayer(
+                            tiles=map_id_diff['tile_fetcher'].url_format,
+                            attr='Map data © Google',
+                            overlay=True,
+                            name='Difference Image'
+                        ).add_to(updated_map)
 
-                    # Add GeoJSON to the map
-                    folium.GeoJson(
-                        data=geojson_aoi,
-                        style_function=lambda x: {'color': 'blue', 'fillOpacity': 0.1}
-                    ).add_to(updated_map)
+                        folium.GeoJson(
+                            data=geojson_aoi,
+                            style_function=lambda x: {'color': 'blue', 'fillOpacity': 0.1}
+                        ).add_to(updated_map)
 
-                    updated_map_html = updated_map._repr_html_()
-                    st.components.v1.html(updated_map_html, width=700, height=500)
+                        updated_map_html = updated_map._repr_html_()
+                        st.components.v1.html(updated_map_html, width=700, height=500)
 
-                    # Save the GeoJSON in session_state so it can be used outside the form
-                    st.session_state["geojson_aoi"] = geojson_aoi
+                        st.session_state["geojson_aoi"] = geojson_aoi
 
-    # Place the download button outside the form
+                except Exception as e:
+                    st.error(f"Error in processing: {e}")
+
+    # Download GeoJSON
     if "geojson_aoi" in st.session_state:
         geojson_data = st.session_state["geojson_aoi"]
         st.download_button(
             label="Download AOI as GeoJSON",
-            data=str(geojson_data),  # Convert to string for download
+            data=str(geojson_data),
             file_name="aoi.geojson",
             mime="application/geo+json"
         )
 
 if __name__ == "__main__":
     main()
-
